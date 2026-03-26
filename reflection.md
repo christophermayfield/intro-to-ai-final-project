@@ -7,6 +7,13 @@
 - Briefly describe your initial UML design.
 - What classes did you include, and what responsibilities did you assign to each?
 
+- I have 4 class, owner, pet, task, scheduler
+- The owner, has all the descriptive information of the owner and their general availability
+- The pet has all the descriptive information of the pet and some relevant functions, such as get_name(), get_species(), add_special_need(), get_spectial_needs()
+- The task has the task_id, name, task_type, duration_minutes, and some functions like get_duration(), get_priority(), set_priority, get_task_type()
+
+
+
 **b. Design changes**
 
 - Did your design change during implementation?
