@@ -19,6 +19,10 @@
 - Did your design change during implementation?
 - If yes, describe at least one change and why you made it.
 
+-The model wanted the owner to directly manage the pets. I chose not to do that since it wasn't directly relevant. 
+-The scheduler is the central coordinator (connects owner+pet+tasks)
+-4.5 also wanted to create a test file
+
 ---
 
 ## 2. Scheduling Logic and Tradeoffs
