@@ -73,6 +73,7 @@ class Pet:
         self._age = age
         self._size = size
         self._special_needs = []
+        self._tasks = []
 
     def get_name(self) -> str:
         """Return the pet's name."""
@@ -103,6 +104,23 @@ class Pet:
         """Return the pet's size."""
         return self._size
 
+    def add_task(self, task: "Task") -> None:
+        """
+        Add a task to this pet.
+
+        Args:
+            task: Task to add to the pet
+        """
+        self._tasks.append(task)
+
+    def get_tasks(self) -> List["Task"]:
+        """Return all tasks for this pet."""
+        return self._tasks
+
+    def get_task_count(self) -> int:
+        """Return the number of tasks for this pet."""
+        return len(self._tasks)
+
 
 class Task:
     """Represents a pet care task with duration and priority."""
@@ -125,6 +143,7 @@ class Task:
         self._description = ""
         self._is_mandatory = False
         self._frequency = "daily"
+        self._is_completed = False
 
     def get_duration(self) -> int:
         """Return task duration in minutes."""
@@ -189,6 +208,18 @@ class Task:
             frequency: How often the task should be done (e.g., "daily", "weekly")
         """
         self._frequency = frequency
+
+    def mark_complete(self) -> None:
+        """Mark this task as completed."""
+        self._is_completed = True
+
+    def is_completed(self) -> bool:
+        """Return whether this task is completed."""
+        return self._is_completed
+
+    def get_frequency(self) -> str:
+        """Return the task frequency."""
+        return self._frequency
 
 
 class ScheduledTask:
