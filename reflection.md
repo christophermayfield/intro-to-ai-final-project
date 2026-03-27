@@ -40,7 +40,8 @@ It was constrained by everything being hard coded.
 - Why is that tradeoff reasonable for this scenario?
 
 -it has a greedly algorithmic tradeoff, picking the highest priority task first. 
-
+-topoligcal stort: it sacrifices some optimization
+-madatory first: may crowd out others
 
 ---
 
