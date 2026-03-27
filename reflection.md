@@ -32,10 +32,15 @@
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
 - How did you decide which constraints mattered most?
 
+It was constrained by everything being hard coded. 
+
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
 - Why is that tradeoff reasonable for this scenario?
+
+-it has a greedly algorithmic tradeoff, picking the highest priority task first. 
+
 
 ---
 
