@@ -41,3 +41,64 @@ pip install -r requirements.txt
 5. Add tests to verify key behaviors.
 6. Connect your logic to the Streamlit UI in `app.py`.
 7. Refine UML so it matches what you actually built.
+
+## Agentic Workflow (Local CLI)
+
+PawPal+ now includes a semi-autonomous agent runtime in `agentic_workflow.py` that can:
+
+- Read owner/pet/task context
+- Generate deterministic schedules using `Scheduler`
+- Propose task updates with a required human approval gate
+- Complete tasks (including recurrence) with approval
+- Return explainable outcomes plus a tool-call trace
+
+### Architecture Notes
+
+- **LLM decides actions**, but does not directly implement scheduling logic
+- **Tool router executes deterministic operations** against existing domain classes
+- **Mutating actions require approval** through a CLI confirmation prompt
+- **Bounded loop** (`max_steps`) prevents runaway tool-calling sessions
+- **Session transcript logging** writes JSON traces to `agent_runs/` by default
+
+### Run the Agent Workflow
+
+1. Start your local open-source model runtime (for example, Ollama).
+2. Run an agent session from CLI:
+
+```bash
+python main.py agent --goal "Plan today's care and explain priorities"
+```
+
+Optional flags:
+
+```bash
+python main.py agent \
+  --goal "Prioritize medication tasks for Luna" \
+  --pet luna \
+  --model llama3.1:8b \
+  --endpoint http://localhost:11434 \
+  --temperature 0.2 \
+  --max-tokens 512 \
+  --max-steps 8 \
+  --transcript-dir agent_runs
+```
+
+To run the classic deterministic demo:
+
+```bash
+python main.py demo
+```
+
+### Testing
+
+Run agent workflow tests:
+
+```bash
+pytest -q tests/test_agentic_workflow.py
+```
+
+### Troubleshooting
+
+- **Model endpoint errors:** ensure your local model server is running and endpoint/model flags are correct.
+- **Invalid JSON from model:** the orchestrator records validation failures in the trace and retries within `max_steps`.
+- **Approval loops:** mutating actions are rejected unless explicitly approved in CLI.

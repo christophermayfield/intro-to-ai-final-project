@@ -3,6 +3,9 @@ main.py - PawPal+ Testing Ground
 Test the scheduling system in the terminal before UI integration.
 """
 
+import argparse
+
+from agentic_workflow import AgentConfig, run_agent_session
 from pawpal_system import Owner, Pet, Scheduler, Task
 
 
@@ -43,9 +46,8 @@ def print_schedule(pet_name, plan):
             print(f"     - {task.get_name()} ({task.get_duration()} min)")
 
 
-def main():
-    """Main testing script for PawPal+ scheduling system."""
-
+def build_sample_context():
+    """Build sample owner/pets/schedulers used by demo and agent CLI."""
     print_header("🐾 PAWPAL+ SCHEDULING SYSTEM - TODAY'S SCHEDULE 🐾")
 
     # Create the owner
@@ -137,8 +139,12 @@ def main():
 
     print(f"   ✓ Added {len(luna_scheduler.get_tasks())} tasks for Luna")
 
-    # Generate schedules
-    print_header("TODAY'S SCHEDULE")
+    return owner, max_dog, luna_cat, max_scheduler, luna_scheduler
+
+
+def run_demo():
+    """Run original CLI demo output with prebuilt sample context."""
+    owner, _, _, max_scheduler, luna_scheduler = build_sample_context()
 
     max_plan = max_scheduler.generate_plan()
     print_schedule("Max", max_plan)
@@ -146,7 +152,6 @@ def main():
     luna_plan = luna_scheduler.generate_plan()
     print_schedule("Luna", luna_plan)
 
-    # Summary
     print_header("SUMMARY")
     total_time = max_plan.get_total_time() + luna_plan.get_total_time()
     print(f"\n📊 Total scheduled time for all pets: {total_time} minutes")
@@ -159,7 +164,6 @@ def main():
     else:
         print("\n✅ Schedule fits within available time!")
 
-    # Show scheduling explanations
     print_header("SCHEDULING DETAILS")
     print("\n🐕 Max's Plan Explanation:")
     print(max_plan.get_explanation())
@@ -170,6 +174,85 @@ def main():
     print("\n" + "=" * 70)
     print("✨ Testing complete! The scheduling system is working correctly.")
     print("=" * 70 + "\n")
+
+
+def run_agent_cli(args):
+    """Run local agentic workflow session from the terminal."""
+    owner, max_dog, luna_cat, max_scheduler, luna_scheduler = build_sample_context()
+    if args.pet.lower() == "luna":
+        pet = luna_cat
+        scheduler = luna_scheduler
+    else:
+        pet = max_dog
+        scheduler = max_scheduler
+
+    config = AgentConfig(
+        model_name=args.model,
+        model_endpoint=args.endpoint,
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        max_steps=args.max_steps,
+        transcript_dir=args.transcript_dir,
+    )
+    session = run_agent_session(
+        goal=args.goal,
+        owner=owner,
+        pet=pet,
+        scheduler=scheduler,
+        config=config,
+    )
+
+    print_header("AGENT SESSION RESULT")
+    print(f"Goal: {args.goal}")
+    print(f"Pet: {pet.get_name()}")
+    print("\nFinal Response:")
+    print(session["final_message"])
+    print(f"\nTrace length: {len(session['trace'])}")
+    print(f"Session ID: {session['session_id']}")
+
+
+def main():
+    """CLI entrypoint for demo and agentic sessions."""
+    parser = argparse.ArgumentParser(description="PawPal+ CLI")
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("demo", help="Run the standard deterministic demo.")
+
+    agent_parser = subparsers.add_parser("agent", help="Run local agentic workflow.")
+    agent_parser.add_argument("--goal", required=True, help="User objective for the agent.")
+    agent_parser.add_argument(
+        "--pet",
+        default="max",
+        choices=["max", "luna"],
+        help="Which sample pet context to use.",
+    )
+    agent_parser.add_argument("--model", default="llama3.1:8b", help="Open-source model name.")
+    agent_parser.add_argument(
+        "--endpoint",
+        default="http://localhost:11434",
+        help="Model API endpoint (e.g. Ollama).",
+    )
+    agent_parser.add_argument(
+        "--temperature", type=float, default=0.2, help="Model sampling temperature."
+    )
+    agent_parser.add_argument(
+        "--max-tokens", type=int, default=512, help="Maximum generated tokens per step."
+    )
+    agent_parser.add_argument(
+        "--max-steps", type=int, default=8, help="Maximum reasoning/tool loop steps."
+    )
+    agent_parser.add_argument(
+        "--transcript-dir",
+        default="agent_runs",
+        help="Directory where agent session transcripts are saved.",
+    )
+
+    args = parser.parse_args()
+    if args.command == "agent":
+        run_agent_cli(args)
+        return
+
+    run_demo()
 
 
 if __name__ == "__main__":
