@@ -5,6 +5,7 @@ A Streamlit application for planning daily pet care tasks.
 
 import streamlit as st
 
+from agentic_workflow import AgentConfig, run_agent_session
 from pawpal_system import Owner, Pet, Scheduler, Task
 
 # Page configuration
@@ -30,6 +31,15 @@ def init_session_state():
 
     if "view" not in st.session_state:
         st.session_state.view = "setup"
+
+    if "agent_last_session" not in st.session_state:
+        st.session_state.agent_last_session = None
+
+    if "agent_selected_pet" not in st.session_state:
+        st.session_state.agent_selected_pet = None
+
+    if "agent_last_approval_message" not in st.session_state:
+        st.session_state.agent_last_approval_message = ""
 
 
 def get_current_pet():
@@ -83,6 +93,12 @@ def render_sidebar():
             "📅 Schedule", use_container_width=True, disabled=not st.session_state.pets
         ):
             st.session_state.view = "schedule"
+            st.rerun()
+
+        if st.button(
+            "🤖 Agent Session", use_container_width=True, disabled=not st.session_state.pets
+        ):
+            st.session_state.view = "agent"
             st.rerun()
 
         st.divider()
@@ -535,6 +551,104 @@ def render_schedule_view():
             st.info("No tasks were scheduled.")
 
 
+def render_agent_view():
+    """Render the local agentic workflow runner in Streamlit."""
+    st.header("🤖 Agent Session")
+    st.caption("Run a semi-autonomous local agent using your current pet/task data.")
+
+    if not st.session_state.pets or not st.session_state.owner:
+        st.warning("⚠️ Please create an owner and add at least one pet first!")
+        return
+
+    pet_names = [pet.get_name() for pet in st.session_state.pets]
+    default_idx = 0
+    if st.session_state.agent_selected_pet in pet_names:
+        default_idx = pet_names.index(st.session_state.agent_selected_pet)
+
+    selected_pet_name = st.selectbox(
+        "Pet Context",
+        pet_names,
+        index=default_idx,
+        help="The agent will only operate on tasks for this pet.",
+    )
+    st.session_state.agent_selected_pet = selected_pet_name
+    current_pet = next(
+        pet for pet in st.session_state.pets if pet.get_name() == selected_pet_name
+    )
+
+    goal = st.text_area(
+        "Agent Goal",
+        placeholder="e.g., Plan today's care and prioritize medication tasks",
+        help="Describe exactly what you want the agent to do.",
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        approval_mode = st.radio(
+            "Mutating Actions",
+            ["Approve all for this run", "Reject all for this run"],
+            help="UI runs are synchronous, so choose approval behavior up front.",
+        )
+    with col2:
+        model_name = st.text_input("Model", value="llama3.1:8b")
+        endpoint = st.text_input("Endpoint", value="http://localhost:11434")
+        max_steps = st.slider("Max Steps", min_value=2, max_value=20, value=8)
+
+    run_clicked = st.button("Run Agent", type="primary", use_container_width=True)
+    if run_clicked:
+        if not goal.strip():
+            st.error("Please provide an agent goal.")
+            return
+
+        approve_mutations = approval_mode == "Approve all for this run"
+
+        def ui_approval_callback(message: str) -> bool:
+            # Streamlit cannot pause mid-run for interactive approvals,
+            # so we use the user's explicit per-run approval mode.
+            st.session_state.agent_last_approval_message = message
+            return approve_mutations
+
+        scheduler = Scheduler(st.session_state.owner, current_pet)
+        for task in st.session_state.tasks.get(current_pet.get_name(), []):
+            scheduler.add_task(task)
+
+        config = AgentConfig(
+            model_name=model_name,
+            model_endpoint=endpoint,
+            max_steps=max_steps,
+        )
+
+        with st.spinner("Running agent session..."):
+            try:
+                session = run_agent_session(
+                    goal=goal.strip(),
+                    owner=st.session_state.owner,
+                    pet=current_pet,
+                    scheduler=scheduler,
+                    config=config,
+                    approval_callback=ui_approval_callback,
+                )
+                st.session_state.agent_last_session = session
+            except Exception as exc:  # pylint: disable=broad-except
+                st.error(f"Agent run failed: {exc}")
+                return
+
+    if st.session_state.agent_last_session:
+        session = st.session_state.agent_last_session
+        st.divider()
+        st.subheader("Latest Agent Result")
+        st.write(f"**Session ID:** {session['session_id']}")
+        st.write(f"**Final Response:** {session['final_message']}")
+        st.write(f"**Trace Steps:** {len(session['trace'])}")
+
+        with st.expander("Trace Details", expanded=False):
+            st.json(session["trace"])
+
+        st.info(
+            "Tip: if no mutations were applied, rerun with 'Approve all for this run' if that matches your intent."
+        )
+
+
 def main():
     """Main application entry point."""
     # Initialize session state
@@ -555,6 +669,9 @@ def main():
 
     elif st.session_state.view == "schedule":
         render_schedule_view()
+
+    elif st.session_state.view == "agent":
+        render_agent_view()
 
     # Footer
     st.divider()
