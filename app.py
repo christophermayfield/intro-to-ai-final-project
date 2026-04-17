@@ -5,7 +5,12 @@ A Streamlit application for planning daily pet care tasks.
 
 import streamlit as st
 
-from agentic_workflow import AgentConfig, run_agent_session
+from agentic_workflow import (
+    AgentConfig,
+    AgentOrchestrator,
+    AgentToolRouter,
+    OllamaModelAdapter,
+)
 from pawpal_system import Owner, Pet, Scheduler, Task
 
 # Page configuration
@@ -40,6 +45,9 @@ def init_session_state():
 
     if "agent_last_approval_message" not in st.session_state:
         st.session_state.agent_last_approval_message = ""
+
+    if "agent_runtime_state" not in st.session_state:
+        st.session_state.agent_runtime_state = None
 
 
 def get_current_pet():
@@ -584,53 +592,94 @@ def render_agent_view():
 
     col1, col2 = st.columns(2)
     with col1:
-        approval_mode = st.radio(
-            "Mutating Actions",
-            ["Approve all for this run", "Reject all for this run"],
-            help="UI runs are synchronous, so choose approval behavior up front.",
-        )
-    with col2:
         model_name = st.text_input("Model", value="llama3.1:8b")
         endpoint = st.text_input("Endpoint", value="http://localhost:11434")
+    with col2:
         max_steps = st.slider("Max Steps", min_value=2, max_value=20, value=8)
+        st.caption("Mutating actions pause for explicit step-by-step approval.")
 
-    run_clicked = st.button("Run Agent", type="primary", use_container_width=True)
-    if run_clicked:
-        if not goal.strip():
-            st.error("Please provide an agent goal.")
-            return
-
-        approve_mutations = approval_mode == "Approve all for this run"
-
-        def ui_approval_callback(message: str) -> bool:
-            # Streamlit cannot pause mid-run for interactive approvals,
-            # so we use the user's explicit per-run approval mode.
-            st.session_state.agent_last_approval_message = message
-            return approve_mutations
-
+    def create_orchestrator():
         scheduler = Scheduler(st.session_state.owner, current_pet)
         for task in st.session_state.tasks.get(current_pet.get_name(), []):
             scheduler.add_task(task)
+
+        def ui_approval_callback(message: str):
+            st.session_state.agent_last_approval_message = message
+            return None
 
         config = AgentConfig(
             model_name=model_name,
             model_endpoint=endpoint,
             max_steps=max_steps,
         )
+        model_adapter = OllamaModelAdapter(model=model_name, endpoint=endpoint)
+        router = AgentToolRouter(
+            owner=st.session_state.owner,
+            pet=current_pet,
+            scheduler=scheduler,
+            approval_callback=ui_approval_callback,
+        )
+        return AgentOrchestrator(
+            model_adapter=model_adapter,
+            tool_router=router,
+            config=config,
+        )
 
-        with st.spinner("Running agent session..."):
+    col_start, col_reset = st.columns(2)
+    with col_start:
+        start_clicked = st.button("Start / Restart Agent", type="primary", use_container_width=True)
+    with col_reset:
+        clear_clicked = st.button("Clear Session", use_container_width=True)
+
+    if clear_clicked:
+        st.session_state.agent_runtime_state = None
+        st.session_state.agent_last_session = None
+        st.session_state.agent_last_approval_message = ""
+        st.rerun()
+
+    if start_clicked:
+        if not goal.strip():
+            st.error("Please provide an agent goal.")
+            return
+        try:
+            orchestrator = create_orchestrator()
+            runtime_state = orchestrator.create_session_state(goal.strip())
+            with st.spinner("Running agent until next approval checkpoint..."):
+                runtime_state = orchestrator.continue_session(runtime_state)
+            st.session_state.agent_runtime_state = runtime_state
+            st.session_state.agent_last_session = runtime_state
+        except Exception as exc:  # pylint: disable=broad-except
+            st.error(f"Agent run failed: {exc}")
+            return
+
+    runtime_state = st.session_state.agent_runtime_state
+    if runtime_state and runtime_state.get("pending_action"):
+        st.warning("Approval required before continuing.")
+        st.code(runtime_state.get("pending_message", ""), language="text")
+        col_a, col_r = st.columns(2)
+        with col_a:
+            approve_clicked = st.button("Approve Step", type="primary", use_container_width=True)
+        with col_r:
+            reject_clicked = st.button("Reject Step", use_container_width=True)
+
+        decision = None
+        if approve_clicked:
+            decision = True
+        elif reject_clicked:
+            decision = False
+
+        if decision is not None:
             try:
-                session = run_agent_session(
-                    goal=goal.strip(),
-                    owner=st.session_state.owner,
-                    pet=current_pet,
-                    scheduler=scheduler,
-                    config=config,
-                    approval_callback=ui_approval_callback,
-                )
-                st.session_state.agent_last_session = session
+                orchestrator = create_orchestrator()
+                with st.spinner("Applying decision and continuing..."):
+                    runtime_state = orchestrator.continue_session(
+                        runtime_state, approval_decision=decision
+                    )
+                st.session_state.agent_runtime_state = runtime_state
+                st.session_state.agent_last_session = runtime_state
+                st.rerun()
             except Exception as exc:  # pylint: disable=broad-except
-                st.error(f"Agent run failed: {exc}")
+                st.error(f"Could not continue session: {exc}")
                 return
 
     if st.session_state.agent_last_session:
@@ -638,15 +687,15 @@ def render_agent_view():
         st.divider()
         st.subheader("Latest Agent Result")
         st.write(f"**Session ID:** {session['session_id']}")
-        st.write(f"**Final Response:** {session['final_message']}")
+        st.write(f"**Completed:** {'Yes' if session.get('completed') else 'No'}")
+        if session.get("final_message"):
+            st.write(f"**Final Response:** {session['final_message']}")
+        if session.get("pending_action"):
+            st.write("**Status:** Waiting for approval")
         st.write(f"**Trace Steps:** {len(session['trace'])}")
 
         with st.expander("Trace Details", expanded=False):
             st.json(session["trace"])
-
-        st.info(
-            "Tip: if no mutations were applied, rerun with 'Approve all for this run' if that matches your intent."
-        )
 
 
 def main():

@@ -57,6 +57,7 @@ PawPal+ now includes a semi-autonomous agent runtime in `agentic_workflow.py` th
 - **LLM decides actions**, but does not directly implement scheduling logic
 - **Tool router executes deterministic operations** against existing domain classes
 - **Mutating actions require approval** through a CLI confirmation prompt
+- **Streamlit step-by-step approvals** pause on each mutating action and require Approve/Reject
 - **Bounded loop** (`max_steps`) prevents runaway tool-calling sessions
 - **Session transcript logging** writes JSON traces to `agent_runs/` by default
 

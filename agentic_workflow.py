@@ -164,7 +164,7 @@ class OllamaModelAdapter(BaseModelAdapter):
             ) from exc
 
 
-def default_approval_callback(message: str) -> bool:
+def default_approval_callback(message: str) -> Optional[bool]:
     """CLI approval prompt used for mutating actions."""
     reply = input(f"{message}\nApprove? [y/N]: ").strip().lower()
     return reply in {"y", "yes"}
@@ -178,22 +178,22 @@ class AgentToolRouter:
         owner: Owner,
         pet: Pet,
         scheduler: Scheduler,
-        approval_callback: Callable[[str], bool] = default_approval_callback,
+        approval_callback: Callable[[str], Optional[bool]] = default_approval_callback,
     ):
         self.owner = owner
         self.pet = pet
         self.scheduler = scheduler
         self.approval_callback = approval_callback
 
-    def execute(self, action: AgentAction) -> ToolResult:
+    def execute(self, action: AgentAction, approval_decision: Optional[bool] = None) -> ToolResult:
         if action.action == "read_context":
             return self._read_context()
         if action.action == "generate_schedule":
             return self._generate_schedule()
         if action.action == "propose_task_update":
-            return self._propose_task_update(action.arguments)
+            return self._propose_task_update(action.arguments, approval_decision)
         if action.action == "complete_task":
-            return self._complete_task(action.arguments)
+            return self._complete_task(action.arguments, approval_decision)
         if action.action == "respond":
             return ToolResult(
                 action="respond",
@@ -265,7 +265,9 @@ class AgentToolRouter:
             },
         )
 
-    def _propose_task_update(self, arguments: Dict[str, Any]) -> ToolResult:
+    def _propose_task_update(
+        self, arguments: Dict[str, Any], approval_decision: Optional[bool] = None
+    ) -> ToolResult:
         task = self._find_task(arguments["task_id"])
         if task is None:
             return ToolResult(
@@ -293,7 +295,16 @@ class AgentToolRouter:
         approval_message = (
             f"Proposed updates for task '{task.get_name()}' ({task.get_task_id()}): {updates}"
         )
-        if not self.approval_callback(approval_message):
+        decision = self._get_approval_decision(approval_message, approval_decision)
+        if decision is None:
+            return ToolResult(
+                action="propose_task_update",
+                success=False,
+                output={"status": "approval_pending"},
+                requires_approval=True,
+                approval_message=approval_message,
+            )
+        if not decision:
             return ToolResult(
                 action="propose_task_update",
                 success=False,
@@ -317,7 +328,9 @@ class AgentToolRouter:
             approval_message=approval_message,
         )
 
-    def _complete_task(self, arguments: Dict[str, Any]) -> ToolResult:
+    def _complete_task(
+        self, arguments: Dict[str, Any], approval_decision: Optional[bool] = None
+    ) -> ToolResult:
         task_id = arguments["task_id"]
         task = self._find_task(task_id)
         if task is None:
@@ -328,7 +341,16 @@ class AgentToolRouter:
             )
 
         approval_message = f"Complete task '{task.get_name()}' ({task.get_task_id()})?"
-        if not self.approval_callback(approval_message):
+        decision = self._get_approval_decision(approval_message, approval_decision)
+        if decision is None:
+            return ToolResult(
+                action="complete_task",
+                success=False,
+                output={"status": "approval_pending"},
+                requires_approval=True,
+                approval_message=approval_message,
+            )
+        if not decision:
             return ToolResult(
                 action="complete_task",
                 success=False,
@@ -357,6 +379,13 @@ class AgentToolRouter:
                 return task
         return None
 
+    def _get_approval_decision(
+        self, approval_message: str, decision_override: Optional[bool]
+    ) -> Optional[bool]:
+        if decision_override is not None:
+            return decision_override
+        return self.approval_callback(approval_message)
+
 
 @dataclass
 class AgentConfig:
@@ -384,12 +413,66 @@ class AgentOrchestrator:
         self.config = config or AgentConfig()
 
     def run_session(self, goal: str) -> Dict[str, Any]:
-        session_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
-        trace: List[Dict[str, Any]] = []
-        final_message = ""
+        session = self.create_session_state(goal)
+        session = self.continue_session(session)
+        if not session.get("completed"):
+            session["final_message"] = (
+                "I could not complete the request within the step limit. "
+                "Please refine the goal or try again."
+            )
+            session["completed"] = True
+        self._write_transcript(session)
+        return session
 
-        for step in range(1, self.config.max_steps + 1):
-            prompt = self._build_prompt(goal=goal, trace=trace, step=step)
+    def create_session_state(self, goal: str) -> Dict[str, Any]:
+        """Create a resumable orchestrator session state."""
+        session_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+        return {
+            "session_id": session_id,
+            "goal": goal,
+            "trace": [],
+            "step": 1,
+            "pending_action": None,
+            "pending_message": "",
+            "final_message": "",
+            "completed": False,
+        }
+
+    def continue_session(
+        self, session: Dict[str, Any], approval_decision: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        """Resume a session until completion, max step, or approval pause."""
+        if session.get("completed"):
+            return session
+
+        pending_action = session.get("pending_action")
+        if pending_action:
+            action = AgentAction(
+                action=pending_action["action"],
+                arguments=pending_action.get("arguments", {}),
+                thought=pending_action.get("thought", ""),
+            )
+            result = self.tool_router.execute(action, approval_decision=approval_decision)
+            session["trace"].append(
+                {
+                    "step": session["step"],
+                    "thought": action.thought,
+                    "action": action.action,
+                    "arguments": action.arguments,
+                    "approval_decision": approval_decision,
+                    "result": asdict(result),
+                }
+            )
+            if result.output.get("status") == "approval_pending":
+                session["pending_message"] = result.approval_message
+                return session
+            session["pending_action"] = None
+            session["pending_message"] = ""
+            session["step"] += 1
+
+        while session["step"] <= self.config.max_steps:
+            step = session["step"]
+            prompt = self._build_prompt(goal=session["goal"], trace=session["trace"], step=step)
             raw = self.model_adapter.next_action(
                 prompt=prompt,
                 temperature=self.config.temperature,
@@ -400,17 +483,18 @@ class AgentOrchestrator:
                 payload = json.loads(raw)
                 action = validate_action_payload(payload)
             except (json.JSONDecodeError, ActionValidationError) as exc:
-                trace.append(
+                session["trace"].append(
                     {
                         "step": step,
                         "raw_model_output": raw,
                         "error": f"validation_error: {exc}",
                     }
                 )
+                session["step"] += 1
                 continue
 
             result = self.tool_router.execute(action)
-            trace.append(
+            session["trace"].append(
                 {
                     "step": step,
                     "thought": action.thought,
@@ -420,24 +504,22 @@ class AgentOrchestrator:
                 }
             )
 
+            if result.output.get("status") == "approval_pending":
+                session["pending_action"] = {
+                    "action": action.action,
+                    "arguments": action.arguments,
+                    "thought": action.thought,
+                }
+                session["pending_message"] = result.approval_message
+                return session
+
             if action.action == "respond" and result.success:
-                final_message = result.output["message"]
-                break
+                session["final_message"] = result.output["message"]
+                session["completed"] = True
+                return session
 
-        if not final_message:
-            final_message = (
-                "I could not complete the request within the step limit. "
-                "Please refine the goal or try again."
-            )
+            session["step"] += 1
 
-        session = {
-            "session_id": session_id,
-            "goal": goal,
-            "final_message": final_message,
-            "trace": trace,
-            "completed": bool(final_message),
-        }
-        self._write_transcript(session)
         return session
 
     def _build_prompt(self, goal: str, trace: List[Dict[str, Any]], step: int) -> str:
@@ -478,7 +560,7 @@ def run_agent_session(
     pet: Pet,
     scheduler: Scheduler,
     config: Optional[AgentConfig] = None,
-    approval_callback: Callable[[str], bool] = default_approval_callback,
+    approval_callback: Callable[[str], Optional[bool]] = default_approval_callback,
     model_adapter: Optional[BaseModelAdapter] = None,
 ) -> Dict[str, Any]:
     """
