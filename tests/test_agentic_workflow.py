@@ -172,3 +172,75 @@ def test_orchestrator_handles_invalid_model_json_and_recovers(tmp_path, schedule
 
     assert session["final_message"] == "Recovered after invalid output."
     assert "validation_error" in session["trace"][0]["error"]
+
+
+def test_guardrail_blocks_meds_task_from_becoming_non_mandatory():
+    owner = Owner("Tester", 120)
+    pet = Pet("Milo", "dog", 4, "medium")
+    scheduler = Scheduler(owner, pet)
+    meds = Task("Insulin", "meds", 5, 10)
+    meds.set_mandatory(True)
+    scheduler.add_task(meds)
+
+    router = AgentToolRouter(
+        owner=owner,
+        pet=pet,
+        scheduler=scheduler,
+        approval_callback=lambda _message: True,
+    )
+    result = router.execute(
+        AgentAction(
+            action="propose_task_update",
+            arguments={"task_id": meds.get_task_id(), "updates": {"mandatory": False}},
+        )
+    )
+    assert result.success is False
+    assert result.output["status"] == "policy_violation"
+    assert "Medication tasks must remain mandatory." in result.output["error"]
+    assert meds.is_mandatory() is True
+
+
+def test_guardrail_blocks_out_of_range_priority_update(scheduler_context):
+    owner, pet, scheduler, task = scheduler_context
+    router = AgentToolRouter(
+        owner=owner,
+        pet=pet,
+        scheduler=scheduler,
+        approval_callback=lambda _message: True,
+    )
+    result = router.execute(
+        AgentAction(
+            action="propose_task_update",
+            arguments={"task_id": task.get_task_id(), "updates": {"priority": 15}},
+        )
+    )
+    assert result.success is False
+    assert result.output["status"] == "policy_violation"
+    assert "Priority must be between 1 and 10." in result.output["error"]
+
+
+def test_guardrail_blocks_completion_when_prerequisites_not_completed():
+    owner = Owner("Tester", 120)
+    pet = Pet("Milo", "dog", 4, "medium")
+    scheduler = Scheduler(owner, pet)
+    prerequisite = Task("Feed", "feeding", 10, 8)
+    dependent = Task("Give meds", "meds", 5, 10)
+    dependent.add_prerequisite(prerequisite)
+    scheduler.add_task(prerequisite)
+    scheduler.add_task(dependent)
+
+    router = AgentToolRouter(
+        owner=owner,
+        pet=pet,
+        scheduler=scheduler,
+        approval_callback=lambda _message: True,
+    )
+    result = router.execute(
+        AgentAction(
+            action="complete_task",
+            arguments={"task_id": dependent.get_task_id()},
+        )
+    )
+    assert result.success is False
+    assert result.output["status"] == "policy_violation"
+    assert "Task prerequisites are not complete." in result.output["error"]

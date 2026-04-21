@@ -184,6 +184,11 @@ class AgentToolRouter:
         self.pet = pet
         self.scheduler = scheduler
         self.approval_callback = approval_callback
+        self.policy_rules = [
+            "priority_must_be_between_1_and_10",
+            "medication_tasks_must_remain_mandatory",
+            "task_cannot_be_completed_before_prerequisites",
+        ]
 
     def execute(self, action: AgentAction, approval_decision: Optional[bool] = None) -> ToolResult:
         if action.action == "read_context":
@@ -237,6 +242,7 @@ class AgentToolRouter:
                     "special_needs": self.pet.get_special_needs(),
                 },
                 "tasks": tasks,
+                "guardrails": self.policy_rules,
             },
         )
 
@@ -292,6 +298,14 @@ class AgentToolRouter:
                 output={"error": f"Unknown update field(s): {', '.join(unknown)}."},
             )
 
+        violation = self._check_update_policy_violations(task, updates)
+        if violation:
+            return ToolResult(
+                action="propose_task_update",
+                success=False,
+                output={"status": "policy_violation", "error": violation},
+            )
+
         approval_message = (
             f"Proposed updates for task '{task.get_name()}' ({task.get_task_id()}): {updates}"
         )
@@ -340,6 +354,14 @@ class AgentToolRouter:
                 output={"error": "Task not found."},
             )
 
+        violation = self._check_completion_policy_violations(task)
+        if violation:
+            return ToolResult(
+                action="complete_task",
+                success=False,
+                output={"status": "policy_violation", "error": violation},
+            )
+
         approval_message = f"Complete task '{task.get_name()}' ({task.get_task_id()})?"
         decision = self._get_approval_decision(approval_message, approval_decision)
         if decision is None:
@@ -385,6 +407,35 @@ class AgentToolRouter:
         if decision_override is not None:
             return decision_override
         return self.approval_callback(approval_message)
+
+    def _check_update_policy_violations(
+        self, task: Task, updates: Dict[str, Any]
+    ) -> Optional[str]:
+        if "priority" in updates:
+            try:
+                priority = int(updates["priority"])
+            except (TypeError, ValueError):
+                return "Priority must be an integer between 1 and 10."
+            if not 1 <= priority <= 10:
+                return "Priority must be between 1 and 10."
+
+        if "mandatory" in updates:
+            requested_mandatory = bool(updates["mandatory"])
+            if task.get_task_type().lower() == "meds" and not requested_mandatory:
+                return "Medication tasks must remain mandatory."
+
+        return None
+
+    def _check_completion_policy_violations(self, task: Task) -> Optional[str]:
+        if not task.has_prerequisites():
+            return None
+
+        completed_task_ids = {
+            completed.get_task_id() for completed in self.scheduler.get_completed_tasks()
+        }
+        if not task.are_prerequisites_met(list(completed_task_ids)):
+            return "Task prerequisites are not complete."
+        return None
 
 
 @dataclass
