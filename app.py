@@ -573,6 +573,15 @@ def render_agent_view():
     st.header("🤖 Agent Session")
     st.caption("Run a semi-autonomous local agent using your current pet/task data.")
 
+    history = st.session_state.agent_approval_history
+    approved_count = sum(1 for entry in history if entry["decision"] == "approved")
+    rejected_count = sum(1 for entry in history if entry["decision"] == "rejected")
+    pending_count = 1 if st.session_state.agent_runtime_state and st.session_state.agent_runtime_state.get("pending_action") else 0
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Approved", approved_count)
+    m2.metric("Rejected", rejected_count)
+    m3.metric("Pending", pending_count)
+
     if not st.session_state.pets or not st.session_state.owner:
         st.warning("⚠️ Please create an owner and add at least one pet first!")
         return
@@ -729,7 +738,6 @@ def render_agent_view():
 
     st.divider()
     st.subheader("Approval History")
-    history = st.session_state.agent_approval_history
     selected_filter = st.radio(
         "Filter",
         options=["all", "approved", "rejected"],
