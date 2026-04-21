@@ -3,6 +3,9 @@ PawPal+ - Pet Care Scheduling Assistant
 A Streamlit application for planning daily pet care tasks.
 """
 
+import copy
+from datetime import datetime
+
 import streamlit as st
 
 from agentic_workflow import (
@@ -48,6 +51,12 @@ def init_session_state():
 
     if "agent_runtime_state" not in st.session_state:
         st.session_state.agent_runtime_state = None
+
+    if "agent_approval_history" not in st.session_state:
+        st.session_state.agent_approval_history = []
+
+    if "agent_history_filter" not in st.session_state:
+        st.session_state.agent_history_filter = "all"
 
 
 def get_current_pet():
@@ -635,6 +644,7 @@ def render_agent_view():
         st.session_state.agent_runtime_state = None
         st.session_state.agent_last_session = None
         st.session_state.agent_last_approval_message = ""
+        st.session_state.agent_approval_history = []
         st.rerun()
 
     if start_clicked:
@@ -670,11 +680,31 @@ def render_agent_view():
 
         if decision is not None:
             try:
+                pre_runtime_snapshot = copy.deepcopy(runtime_state)
+                pre_tasks_snapshot = copy.deepcopy(
+                    st.session_state.tasks.get(current_pet.get_name(), [])
+                )
                 orchestrator = create_orchestrator()
                 with st.spinner("Applying decision and continuing..."):
                     runtime_state = orchestrator.continue_session(
                         runtime_state, approval_decision=decision
                     )
+
+                # Sync potentially mutated scheduler task list back to UI state
+                st.session_state.tasks[current_pet.get_name()] = (
+                    orchestrator.tool_router.scheduler.get_tasks()
+                )
+
+                st.session_state.agent_approval_history.append(
+                    {
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "message": pre_runtime_snapshot.get("pending_message", ""),
+                        "decision": "approved" if decision else "rejected",
+                        "pet_name": current_pet.get_name(),
+                        "pre_runtime_state": pre_runtime_snapshot,
+                        "pre_tasks_snapshot": pre_tasks_snapshot,
+                    }
+                )
                 st.session_state.agent_runtime_state = runtime_state
                 st.session_state.agent_last_session = runtime_state
                 st.rerun()
@@ -696,6 +726,58 @@ def render_agent_view():
 
         with st.expander("Trace Details", expanded=False):
             st.json(session["trace"])
+
+    st.divider()
+    st.subheader("Approval History")
+    history = st.session_state.agent_approval_history
+    selected_filter = st.radio(
+        "Filter",
+        options=["all", "approved", "rejected"],
+        horizontal=True,
+        key="agent_history_filter",
+    )
+    if not history:
+        st.caption("No approval decisions recorded yet.")
+    else:
+        filtered_history = [
+            entry
+            for entry in history
+            if selected_filter == "all" or entry["decision"] == selected_filter
+        ]
+        if not filtered_history:
+            st.caption("No entries for this filter yet.")
+        for idx, entry in enumerate(reversed(filtered_history), start=1):
+            decision = entry["decision"]
+            if decision == "approved":
+                status_icon = "✅"
+                status_badge = ":green[approved]"
+            else:
+                status_icon = "❌"
+                status_badge = ":red[rejected]"
+
+            st.markdown(
+                f"**{idx}. {status_icon} {entry['timestamp']}** · {status_badge} · {entry['pet_name']}"
+            )
+            full_message = entry["message"] or "(no approval message)"
+            preview = (
+                full_message
+                if len(full_message) <= 120
+                else f"{full_message[:120].rstrip()}..."
+            )
+            st.caption(preview)
+            if len(full_message) > 120:
+                with st.expander(f"View full message #{idx}", expanded=False):
+                    st.code(full_message, language="text")
+
+        last_entry = history[-1]
+        undo_disabled = last_entry["decision"] != "approved"
+        if st.button("Undo Last Approval", disabled=undo_disabled, use_container_width=True):
+            st.session_state.tasks[last_entry["pet_name"]] = last_entry["pre_tasks_snapshot"]
+            st.session_state.agent_runtime_state = last_entry["pre_runtime_state"]
+            st.session_state.agent_last_session = last_entry["pre_runtime_state"]
+            st.session_state.agent_approval_history.pop()
+            st.success("Last approved step was reverted.")
+            st.rerun()
 
 
 def main():
