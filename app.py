@@ -1,6 +1,7 @@
 """
 PawPal+ - Pet Care Scheduling Assistant
 A Streamlit application for planning daily pet care tasks.
+Christopher Mayfield
 """
 
 import copy
@@ -8,6 +9,7 @@ from datetime import datetime
 
 import streamlit as st
 
+# Agentic workflow imports
 from agentic_workflow import (
     AgentConfig,
     AgentOrchestrator,
