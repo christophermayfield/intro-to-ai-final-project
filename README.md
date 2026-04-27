@@ -103,3 +103,7 @@ pytest -q tests/test_agentic_workflow.py
 - **Model endpoint errors:** ensure your local model server is running and endpoint/model flags are correct.
 - **Invalid JSON from model:** the orchestrator records validation failures in the trace and retries within `max_steps`.
 - **Approval loops:** mutating actions are rejected unless explicitly approved in CLI.
+
+### Loom link to project 
+
+https://www.loom.com/share/3563ffea816545438b2ac84f725858b0
